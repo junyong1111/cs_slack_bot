@@ -1,6 +1,7 @@
 from app.services.study_mode import run_network_learning_fsm, process_level_test_answers, study_advanced_topic, start_interview_session, get_next_interview_question, answer_user_question
 from app.api.slack.app import slack_app
 import json
+import random
 
 # 사용자별 상태 저장
 user_state = {}
@@ -163,31 +164,47 @@ async def handle_message(body, say):
             # 백그라운드에서 테스트 문제 생성
             import asyncio
 
-            # 테스트 문제 생성 함수 정의 (간소화 버전)
+            # 테스트 문제 생성 함수 정의 (동적 생성 버전)
             async def generate_test_questions(topic):
-                if topic == "네트워크":
+                from app.services.openai_service import get_completion
+                from app.prompts.fsm_prompts import level_test_prompt
+                import json
+
+                # 프롬프트 형식 사용하여 동적으로 문제 생성
+                prompt = level_test_prompt.format(topic=topic)
+
+                try:
+                    # OpenAI API로 문제 생성
+                    response = await get_completion(prompt=prompt, temperature=0.8)
+
+                    # JSON 파싱
+                    questions = json.loads(response)
+
+                    # 객관식 문제의 정답 형식 확인 및 수정
+                    for question in questions:
+                        if question["type"] == "객관식":
+                            # 정답이 인덱스가 아니라 내용인 경우 A, B, C, D 형식으로 변환
+                            answer = question["answer"]
+                            if answer not in ["A", "B", "C", "D"]:
+                                # 정답 내용이 어떤 옵션에 해당하는지 찾아서 변환
+                                for i, option in enumerate(question["options"]):
+                                    if option == answer:
+                                        question["answer"] = chr(65 + i)  # A, B, C, D로 변환
+                                        break
+
+                    return questions
+                except Exception as e:
+                    print(f"문제 생성 중 오류 발생: {str(e)}")
+                    # 오류 발생 시 기본 문제 세트 반환
                     return [
-                        {"type": "OX", "question": "OSI 7계층에서 물리 계층은 비트 단위의 데이터 전송을 담당한다.", "answer": "O"},
-                        {"type": "OX", "question": "HTTP는 연결 지향형 프로토콜이다.", "answer": "X"},
-                        {"type": "객관식", "question": "다음 중 전송 계층 프로토콜이 아닌 것은?",
-                         "options": ["TCP", "UDP", "HTTP", "SCTP"], "answer": "C"},
-                        {"type": "객관식", "question": "다음 중 IP 주소 클래스 A의 범위는?",
-                         "options": ["1.0.0.0 ~ 126.255.255.255", "128.0.0.0 ~ 191.255.255.255", "192.0.0.0 ~ 223.255.255.255", "224.0.0.0 ~ 239.255.255.255"],
-                         "answer": "A"},
-                        {"type": "주관식", "question": "TCP의 3-way handshake 과정을 설명하시오.",
-                         "answer": "1) 클라이언트가 서버에 SYN 패킷 전송 2) 서버가 클라이언트에 SYN+ACK 패킷 전송 3) 클라이언트가 서버에 ACK 패킷 전송으로 연결 수립"}
-                    ]
-                else:
-                    # 다른 주제에 대한 기본 테스트 문제
-                    return [
-                        {"type": "OX", "question": f"{topic}의 기본 개념에 대한 OX 문제 1", "answer": "O"},
-                        {"type": "OX", "question": f"{topic}의 기본 개념에 대한 OX 문제 2", "answer": "X"},
+                        {"type": "OX", "question": f"{topic}의 기본 개념에 대한 OX 문제 1", "answer": "O", "level": "기본", "topic": "기본 개념"},
+                        {"type": "OX", "question": f"{topic}의 기본 개념에 대한 OX 문제 2", "answer": "X", "level": "중급", "topic": "중급 개념"},
                         {"type": "객관식", "question": f"{topic}의 중요 개념에 대한 객관식 문제 1",
-                         "options": ["선택지 A", "선택지 B", "선택지 C", "선택지 D"], "answer": "A"},
+                         "options": ["선택지 A", "선택지 B", "선택지 C", "선택지 D"], "answer": "A", "level": "기본", "topic": "핵심 개념"},
                         {"type": "객관식", "question": f"{topic}의 중요 개념에 대한 객관식 문제 2",
-                         "options": ["선택지 A", "선택지 B", "선택지 C", "선택지 D"], "answer": "B"},
+                         "options": ["선택지 A", "선택지 B", "선택지 C", "선택지 D"], "answer": "B", "level": "중급", "topic": "응용 개념"},
                         {"type": "주관식", "question": f"{topic}의 핵심 개념에 대해 설명하시오.",
-                         "answer": f"{topic}의 핵심 개념에 대한 모범 답안입니다."}
+                         "answer": f"{topic}의 핵심 개념에 대한 모범 답안입니다.", "level": "고급", "topic": "심화 개념"}
                     ]
 
             # 비동기적으로 문제 생성 (실제로는 미리 준비된 문제 사용)
@@ -253,15 +270,21 @@ async def handle_message(body, say):
                     user_state[user]["tags"] = tags
 
             # 순차적으로 메시지 전송 (한 번에 몇 개씩 묶어서 전송)
-            batch_size = 2
+            batch_size = 1  # 한 번에 하나의 메시지만 보내도록 수정
             filtered_steps = [step for step in steps if "수준 테스트" not in step and "세부 학습 주제" not in step]
 
             for i in range(0, len(filtered_steps), batch_size):
                 batch = filtered_steps[i:i+batch_size]
-                message = "\n\n".join(batch)
-                await say(message)
-                import asyncio
-                await asyncio.sleep(0.5)
+                for message in batch:
+                    # 이모지 처리
+                    if message.startswith("🧠") or message.startswith("📚") or message.startswith("📋"):
+                        # 각 이모지 줄은 별도로 전송
+                        await say(message)
+                    else:
+                        # 일반 텍스트는 그대로 전송
+                        await say(message)
+                    import asyncio
+                    await asyncio.sleep(0.5)  # 메시지 간 약간의 지연
 
             # 학습 완료 안내
             await say("✅ 기본 개념 학습이 완료되었습니다. 더 공부하고 싶으시면 '공부시작'을 다시 입력하시거나 '질문 [주제] [질문내용]' 형식으로 질문해주세요.")
@@ -310,10 +333,20 @@ async def handle_message(body, say):
                 # 객관식 처리 수정
                 if question["type"] == "객관식":
                     # 사용자가 A, B, C, D로 답변했다면 그대로 비교
-                    pass
-
-                if user_answer == correct_answer:
-                    score += 1
+                    if user_answer in ["A", "B", "C", "D"]:
+                        if user_answer == correct_answer:
+                            score += 1
+                    # 사용자가 선택지의 내용을 입력했다면 해당 내용과 정답 내용 비교
+                    else:
+                        correct_option_idx = ord(correct_answer) - ord('A')
+                        if 0 <= correct_option_idx < len(question["options"]):
+                            correct_text = question["options"][correct_option_idx]
+                            if user_answer.lower() == correct_text.lower():
+                                score += 1
+                else:
+                    # OX 문제나 주관식은 기존대로 처리
+                    if user_answer == correct_answer:
+                        score += 1
 
         # 수준 평가
         percentage = (score / total) * 100
@@ -337,15 +370,20 @@ async def handle_message(body, say):
 
         # 정답 및 해설 제공
         await say("\n📝 *정답 및 해설*:")
+
+        # 각 문제별 정답과 해설을 별도의 메시지로 처리
         for i, q in enumerate(user_state[user]["test_questions"]):
+            answer_msg = ""
             if q["type"] == "OX":
-                await say(f"{i+1}. [OX] {q['question']} (정답: {q['answer']})")
+                answer_msg = f"{i+1}. [OX] {q['question']} (정답: {q['answer']})"
             elif q["type"] == "객관식":
                 opt_idx = ord(q["answer"]) - ord('A')
                 opt_text = q["options"][opt_idx] if 0 <= opt_idx < len(q["options"]) else q["answer"]
-                await say(f"{i+1}. [객관식] {q['question']} (정답: {q['answer']}. {opt_text})")
+                answer_msg = f"{i+1}. [객관식] {q['question']} (정답: {q['answer']}. {opt_text})"
             else:
-                await say(f"{i+1}. [주관식] {q['question']} (모범답안: {q['answer']})")
+                answer_msg = f"{i+1}. [주관식] {q['question']} (모범답안: {q['answer']})"
+
+            await say(answer_msg)
 
         # 사용자 수준 저장
         user_state[user]["user_level"] = level
@@ -363,15 +401,21 @@ async def handle_message(body, say):
                 user_state[user]["tags"] = tags
 
         # 순차적으로 메시지 전송 (한 번에 몇 개씩 묶어서 전송)
-        batch_size = 2
+        batch_size = 1  # 한 번에 하나의 메시지만 보내도록 수정
         filtered_steps = [step for step in steps if "수준 테스트" not in step and "세부 학습 주제" not in step]
 
         for i in range(0, len(filtered_steps), batch_size):
             batch = filtered_steps[i:i+batch_size]
-            message = "\n\n".join(batch)
-            await say(message)
-            import asyncio
-            await asyncio.sleep(0.5)
+            for message in batch:
+                # 이모지 처리
+                if message.startswith("🧠") or message.startswith("📚") or message.startswith("📋"):
+                    # 각 이모지 줄은 별도로 전송
+                    await say(message)
+                else:
+                    # 일반 텍스트는 그대로 전송
+                    await say(message)
+                import asyncio
+                await asyncio.sleep(0.5)  # 메시지 간 약간의 지연
 
         # 학습 완료 안내
         await say("✅ 기본 개념 학습이 완료되었습니다. 더 공부하고 싶으시면 '공부시작'을 다시 입력하시거나 '질문 [주제] [질문내용]' 형식으로 질문해주세요.")
