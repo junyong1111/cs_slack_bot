@@ -219,6 +219,43 @@ def next_interview_question(state: NetworkGraphState) -> NetworkGraphState:
         "current_interview_index": state["current_interview_index"] + 1
     })
 
+# 인터뷰 질문 가져오기
+def get_interview_question(state: NetworkGraphState) -> NetworkGraphState:
+    """
+    현재 인덱스의 인터뷰 질문을 가져옵니다.
+    """
+    index = state["current_interview_index"]
+
+    # 인덱스가 범위를 벗어난 경우 처리
+    if index >= len(state["interview_questions"]):
+        return state
+
+    # 현재 질문 정보 추출
+    current_question = state["interview_questions"][index]
+
+    # 기본 질문이 'basic' 키에 있고, 심화 질문이 'advanced' 키에 있는 경우 처리
+    if "basic" in current_question:
+        question = current_question["basic"]
+    elif "advanced" in current_question:
+        question = current_question["advanced"]
+    else:
+        question = "질문을 가져올 수 없습니다."
+
+    # 질문 형식 통일을 위해 state 업데이트
+    updated_question = {
+        "question": question,
+        "answer": current_question.get("answer", "")
+    }
+
+    # 해당 인덱스의 질문 업데이트
+    interview_questions = state["interview_questions"].copy()
+    interview_questions[index] = {**current_question, **updated_question}
+
+    return cast(NetworkGraphState, {
+        **state,
+        "interview_questions": interview_questions
+    })
+
 # 타입 힌팅 없이 조건부 라우팅 함수 정의 (LangGraph는 이 함수의 반환 타입을 자체적으로 처리함)
 def decide_next_step(state):
     # 모드에 따라 다음 단계 결정
